@@ -1,0 +1,263 @@
+Course Project
+========================================================
+```{r setup, include=FALSE}
+opts_chunk$set(cache=TRUE)
+``` 
+
+### **A) Data Stage - Preprocessing**
+
+We first load the libraries and the files and check the training data's summary information.
+
+```{r loadfiles}
+#Load libraries
+library("ggplot2")
+library("caret")
+library("parallel")
+library("foreach")
+library("doParallel")
+library("knitr")
+library("randomForest")
+#Load the files
+pml.training <- read.table("~/Documents/study/pml-training.csv",header=T,sep=",")
+pml.testing <- read.table("~/Documents/study/pml-testing.csv",header=T,sep=",")
+```
+
+```{r diagnostic}
+#Check summary information
+dim(pml.training)
+levels(pml.training$user_name)
+class.types <- apply(pml.training,2,class)
+num.nonNA.records <- apply(pml.training,2,function(x) sum(!is.na(x)))
+sum(num.nonNA.records>15000)
+numlevels <- apply(pml.training,2,function(x) length(unique(x)))
+apply(pml.training[,which(numlevels==2)],2,function(x) data.frame(table(x))$Freq[2])
+```
+
+“pml-training.csv” data includes all data that can be used to build a model. Types of data in this set are;
+-  Participant key information: Participant name, exercise timestamps, etc.
+-  Experiment details/measures (used as predictors for model)
+-	“Classe” variable which is the outcome variable
+
+There are several variables with many NA records. It is observed that these variables’ NA records are always in the same row. Therefore, we create an additional variable called “NA.record” to capture missing information.
+
+There are also several variables which have the same NA records mentioned above as “#DIV/0!” and other records as “”. These variables are excluded from the data set since they don’t provide any additional information. Preprocessing codes follow:
+
+```{r preprocessing}
+numlevels <- apply(pml.training,2,function(x) length(unique(x)))
+NA.records <- which(is.na(pml.training$max_roll_forearm))
+
+#Removing two-level variables
+pml.training2 <- pml.training[,-which(numlevels==2)]
+
+#Converting the variables into numeric - except columns 2 to 5 and "classe" variable
+pml.training3 <- pml.training2
+for(i in c(1,6:(ncol(pml.training2)-1))){
+  pml.training3[,i] <- as.numeric(as.character(pml.training2[,i]))
+}
+#Adding a new variable for the missing cases ("missing" can be also an information)
+pml.training3$NA.record <- 0
+pml.training3$NA.record[NA.records] <- 1
+```
+
+### **B) Sampling**
+
+Data is first randomly split into train and holdout samples, each forming 80% and 20% consecutively. Please note that test samples within the train sample are later used as part of the cross-validation. Each test sample constitutes to 20% of the overall data, while each build sample constitutes to 60%.
+
+Note that some columns had a high number of NAs. These columns are excluded before the modeling can take place.
+
+```{r sampling}
+train <- sample(1:nrow(pml.training3),nrow(pml.training3)*0.8)
+train.data <- pml.training3[train,]
+holdout.data <- pml.training3[-train,]
+```
+
+
+```{r removeNAs}
+#Remove the columns with too many NAs
+NA.threshold.perc <- 0.8 #If 80% of the data is missing, remove
+NA.threshold <- nrow(train.data)*NA.threshold.perc
+manyNAs <- which(apply(train.data,2,function(x) sum(is.na(x)))>NA.threshold)
+
+#Approach: Remove the columns with too many NAs, also remove initial timestamp etc. columns
+columns.to.remove <- c(1:6,manyNAs)
+
+train.clean.data <- train.data[,-columns.to.remove]
+train.predictors <- train.clean.data[,-which(colnames(train.clean.data) %in% "classe")]
+train.Y <- train.clean.data$classe
+hold.clean.data <- holdout.data[,-columns.to.remove]
+hold.predictors <- hold.clean.data[,-which(colnames(hold.clean.data) %in% "classe")]
+hold.Y <- hold.clean.data$classe
+```
+
+The train and holdout sets are ready. As a final step, outcome flag distribution is checked on both train and holdout sample to make sure the distribution is similar.
+
+
+```{r checkdist}
+#Are classes similarly distributed in train and holdout?
+round(table(hold.Y)/length(hold.Y),2)
+round(table(train.Y)/length(train.Y),2)
+```
+
+
+### **C) Modelling**
+
+Several different models are tried; but to come up with the best model, a cross-validation approach is followed.
+
+*Cross validation:* Training sample is split into 4 folds, each time 3 folds used for model build and 1 fold used to test the model on. “Correctly classified %” on this test sample is used as a measure to choose the best model. This process is repeated 10 times for each model trial, i.e. 40 results are produced for each - where final results are bootstrapped.
+
+Function below is created for the cross validation purposes (details in comments):
+```{r MethodTest}
+MethodTest <- function(X,Y,num.folds,num.runs,method,ncores){
+  #To run the program in parallel processors
+  registerDoParallel(cores=ncores)
+  #The loop for each run
+  foreach.result <- foreach(i=1:num.runs,.combine="c") %dopar% {
+    cc.all <- rep(NA,num.folds)
+    #Creating k-folds for cross validation
+    folds <- createFolds(Y,num.folds)
+    #The loop for each fold
+    for (j in 1:num.folds){
+      print(paste("Fold",j))
+      #Create the train and test data sets
+      all.folds <- 1:num.folds
+      trn.folds <- which(!all.folds %in% j)
+      trn.index <- as.numeric(do.call("c",folds[trn.folds]))
+      tst.index <- folds[[j]]
+      
+      trnY <- Y[trn.index]
+      tstY <- Y[tst.index]
+      trnX <- data.frame(X[trn.index,])
+      tstX <- data.frame(X[tst.index,])
+      
+      #Train the method on train sample
+      if(method=="randomForest") model <- randomForest(x=trnX,y=trnY,ntree=300)
+      else model <- train(x=trnX,y=trnY,method=method)
+      
+      #Predict the test sample results
+      prdct <- predict(model,tstX)
+      
+      #Find the correctly classified % on test sample
+      correctly.classified <- sum(prdct==tstY)/length(tstY)
+      cc.all[j] <- correctly.classified
+    }
+    cc.all
+  }
+  foreach.result
+}
+```
+
+Following learning algorithms are run.
+- Linear Discriminant Analysis (lda)
+-	Naïve Bayes (nb)
+-	Multinomial Regression (multinom)
+-	Random Forest (rf)
+-	Also principal components analysis (PCA) done on each method with components explaining 95% of the variance (prin095)
+
+5 separate logistic regressions could also be tried; however this would be both computationally expensive and less likely to outperform random forest. Hypothesis here is that since the data set is large and the outcome flag is a 5-category variable, an ensemble of decision trees; more specifically random forest should work the best.
+
+```{r runMethods}
+try.lda <- MethodTest(train.predictors,train.Y,4,10,method="lda",ncores=1)
+try.multinom <- MethodTest(train.predictors,train.Y,4,10,method="multinom",ncores=1)
+try.rf <- MethodTest(train.predictors,train.Y,4,10,method="randomForest",ncores=1)
+try.nb <- MethodTest(train.predictors,train.Y,4,10,method="nb",ncores=1)
+
+#Now with principal component analysis
+train.prin.095 <- preProcess(train.predictors,method="pca",thresh=0.95)
+prin095.train <- predict(train.prin.095,train.predictors)
+prin095.hold <- predict(train.prin.095,hold.predictors)
+
+try.lda.prin095 <- MethodTest(prin095.train,train.Y,4,10,method="lda",ncores=1)
+try.multinom.prin095 <- MethodTest(prin095.train,train.Y,4,10,method="multinom",ncores=1)
+try.rf.prin095 <- MethodTest(prin095.train,train.Y,4,10,method="randomForest",ncores=1)
+```
+
+Each object above includes the correct classification %s on 20 different test samples. Mean of them would give us the average. Now we build the model on whole train sample and calculate the performance on holdout.
+
+```{r actualModels}
+#Function that trains the model, predicts on holdout sample and 
+#returns the correct classification %
+HoldoutCC <- function(train.predictors,train.Y,hold.predictors,hold.Y,method){
+  if(method=="rf") model <- randomForest(x=train.predictors,y=train.Y,ntree=300)
+  else model <- train(x=train.predictors,y=train.Y,method=method)
+  prdct <- predict(model,hold.predictors)
+  round(100*sum(prdct==hold.Y)/length(hold.Y),1)
+}
+
+#Calculate correct classification for each method (including PCA approaches)
+lda.cc <- HoldoutCC(train.predictors,train.Y,hold.predictors,hold.Y,"lda")
+multinom.cc <- HoldoutCC(train.predictors,train.Y,hold.predictors,hold.Y,"multinom")
+rf.cc <- HoldoutCC(train.predictors,train.Y,hold.predictors,hold.Y,"rf")
+nb.cc <- HoldoutCC(train.predictors,train.Y,hold.predictors,hold.Y,"nb")
+lda.prin095.cc <- HoldoutCC(prin095.train,train.Y,prin095.hold,hold.Y,"lda")
+multinom.prin095.cc <- HoldoutCC(prin095.train,train.Y,prin095.hold,hold.Y,"multinom")
+rf.prin095.cc <- HoldoutCC(prin095.train,train.Y,prin095.hold,hold.Y,"rf")
+```
+
+
+### **D) Results**
+
+As mentioned, many results from different runs and folds as part of cross-validation are collected. We expect to see similar results in holdout sample as we see in the bootstrapped cross-validation.
+
+An example to these cross validation tables from which the results will be bootstrapped:
+```{r cvExample}
+try.lda
+```
+
+To make the final decision, *results table* is prepared:
+```{r results}
+results <- matrix(NA,7,4)
+colnames(results) <- c("PCA","Method","Cross-Valdt cc %","Holdout cc%")
+results[,"PCA"] <- c(rep("No",4),rep("Yes",3))
+results[1:4,"Method"] <- c("Linear Discriminant","Multinomial Regression","Random Forest","Naive Bayes")
+results[5:7,"Method"] <- c("Linear Discriminant","Multinomial Regression","Random Forest")
+
+meansum <- function(x) round(100*mean(x),1)
+results[,3] <- c(meansum(try.lda),meansum(try.multinom),meansum(try.rf),meansum(try.nb),
+                 meansum(try.lda.prin095),meansum(try.multinom.prin095),meansum(try.rf.prin095))
+results[,4] <- c(lda.cc,multinom.cc,rf.cc,nb.cc,lda.prin095.cc,multinom.prin095.cc,rf.prin095.cc)
+```
+
+```{r displayResults}
+results
+```
+*** cc in above table: Correct Classification %
+
+Based on the modelling results, it is clear that random forest method without pre-processing (no PCA) is the best method to differentiate “classe” levels. PCA did not show any improvement in any method. We will use the model that had an aggregated a **99.36%** accuracy on cross validation and **99.44%** accuracy on holdout sample.
+
+This also tells us the error rate we would observe on a completely blind sample would be robust, because holdout sample was not touched at all during the cross validation and model selection. The error rate we’d expect on a separate blind sample would be:  (1 – 0.9944) = **0. 56%**
+
+
+### **D) Improvement Areas**
+
+The model can still be improved if more time and resource will be allocated.
+
+-  We can identify the less contributing factors within the RF model via “$importance” table and make a stepwise removal of these factors to see how the model works on the cross validated sample.
+-	Similar stepwise approach can be used for the multinomial regression as well. The reason it performs the worst among others is because there is high overfitting by including all the variables in the model.
+-	Overfitting in multinomial model can be also avoided by regularization. However for this, first, the lambda parameter must be optimized.
+
+
+### **E) Produce Testing Output**
+
+First, we do the same preprocessing we did on pml_training data.
+```{r testingPreprocess}
+#Column exclusion and inclusion are not sample dependent
+#We proceed by excluding and adding the same columns as in training
+for(i in c(6:ncol(pml.testing))){
+  pml.testing[,i] <- as.numeric(as.character(pml.testing[,i]))
+}
+
+NA.records <- which(is.na(pml.testing$max_roll_forearm))
+pml.testing$NA.record <- 0
+pml.testing$NA.record[NA.records] <- 1
+```
+
+Then we apply our model on pml_testing data.
+```{r applyModel}
+prdct.testing <- predict(model.rf,pml.testing)
+prdct.testing <- as.character(prdct.testing)
+```
+
+Final output:
+```{r finalOutput}
+prdct.testing
+```
