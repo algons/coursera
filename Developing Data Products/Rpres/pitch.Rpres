@@ -58,13 +58,13 @@ This application helps you to calculate the tip you could leave, based on:
 How it works
 ========================================================
 type: twocols
-left:70%
+left:64%
 
 <br>
-You input your bill amount with the slider in the sidebar
+You input your bill amount on the slider in the sidebar
 
 <br>
-You input number of people dining with the second slider
+You input number of people dining on the second slider in the sidebar
 
 <br>
 Then you input your thoughts about the place by checking out the boxes in the sidebar
@@ -75,8 +75,10 @@ Then you input your thoughts about the place by checking out the boxes in the si
 
 ***
 ![bill](https://raw.githubusercontent.com/algons/coursera/master/Developing%20Data%20Products/Rpres/bill.png)
-<br>
+
+
 ![size](https://raw.githubusercontent.com/algons/coursera/master/Developing%20Data%20Products/Rpres/size.png)
+
 ![feedback](https://raw.githubusercontent.com/algons/coursera/master/Developing%20Data%20Products/Rpres/feedback.png)
 
 Example
