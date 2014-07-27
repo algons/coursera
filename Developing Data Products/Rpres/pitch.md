@@ -11,7 +11,7 @@
     font-family: 'Helvetica';
   }
   .withcode .reveal code{
-    font-size: 0.9em;
+    font-size: 0.75em;
   }
   
   .twocols .reveal p{
@@ -36,7 +36,7 @@ Tip Calculator
 ========================================================
 author: Alper Gondiken
 
-`r Sys.Date()`
+2014-07-27
 
 Executive Summary
 ========================================================
@@ -88,7 +88,8 @@ You and your three friends had dinner and your bill is £72
 
 Your feedbacks are "Waitress was a smiling person" and "Service quality was high"
 
-```{r}
+
+```r
 bill <- 72
 size <- 4
 feedback <- c("Smiling","High-quality")
@@ -110,7 +111,8 @@ As the bill increases, tips tend to decrease percentage-wise*
 
 *: [Information comes from the research](http://www.info.univ-angers.fr/~gh/Datasets/tips_cs503.pdf)
 
-```{r}
+
+```r
 tipModel <- function(bill,feedback,size){
   #Every positive feedback counts for 5% tip on top of 5% minimum
   feedback.reward <- length(feedback)*0.05 + 0.05
@@ -125,8 +127,20 @@ tipModel <- function(bill,feedback,size){
 
 In the example from previous page, calculate the tip amount and total payment amount:
 
-```{r}
+
+```r
 tipModel(bill,feedback,size) #Tip amount
+```
+
+```
+[1] 9.6
+```
+
+```r
 bill + tipModel(bill,feedback,size) #Total payment
+```
+
+```
+[1] 81.6
 ```
 
